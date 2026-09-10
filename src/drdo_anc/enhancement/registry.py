@@ -69,12 +69,24 @@ def create_enhancer(
 
 def _register_builtin_models() -> None:
     from .deepfilternet import DeepFilterNetEnhancer
+    from .finetuned import (
+        FINETUNED_MODEL_NAME,
+        FINETUNED_STREAMING_DELAY_SAMPLES,
+        FineTunedDeepFilterNetEnhancer,
+    )
 
     register_model(
         ModelConfig(
             name="DeepFilterNet3",
             streaming_delay_samples=1440,
             factory=DeepFilterNetEnhancer,
+        ),
+    )
+    register_model(
+        ModelConfig(
+            name=FINETUNED_MODEL_NAME,
+            streaming_delay_samples=FINETUNED_STREAMING_DELAY_SAMPLES,
+            factory=FineTunedDeepFilterNetEnhancer,
         ),
     )
 

@@ -209,6 +209,9 @@ class StreamingPipeline:
             self._instrumentation.add_input_chunk(len(chunk))
 
         if self._enhancer is None:
+            prepare_raw = getattr(self._audio_output, "prepare_raw", None)
+            if prepare_raw is not None:
+                prepare_raw(chunk)
             self._write_output(chunk, processing_time_s=0.0)
             if self._telemetry_callback is not None:
                 self._telemetry_callback(chunk, chunk, 0.0)
@@ -224,6 +227,9 @@ class StreamingPipeline:
         processing_time_s = time.perf_counter() - start
         
         output_array = _tensor_to_mono_numpy(output_tensor)
+        prepare_raw = getattr(self._audio_output, "prepare_raw", None)
+        if prepare_raw is not None:
+            prepare_raw(chunk)
         self._write_output(
             output_array,
             processing_time_s,

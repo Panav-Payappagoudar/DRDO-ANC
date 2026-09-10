@@ -290,6 +290,26 @@ def test_no_nan_or_inf() -> None:
     assert np.isfinite(analysis.reference_rms)
 
 
+def test_different_reference_sample_rate_analysis() -> None:
+    sample_rate = 48_000
+    reference_rate = 16_000
+    length_primary = sample_rate
+    length_reference = reference_rate
+    primary = _synthetic_mono(length_primary, frequency_hz=440.0)
+    reference = _synthetic_mono(length_reference, frequency_hz=440.0, amplitude=0.5)
+
+    analysis = analyze_independent_pair(
+        primary,
+        reference,
+        sample_rate,
+        reference_sample_rate=reference_rate,
+        max_delay_samples=512,
+    )
+
+    assert analysis.correlation > 0.9
+    assert "Reference resampled" in analysis.alignment_note
+
+
 def test_capture_failure_is_reported() -> None:
     config = IndependentMicConfig(
         primary_device=1,
@@ -617,6 +637,7 @@ def main() -> None:
         test_metadata_identifies_independent_devices,
         test_requested_duration_is_preserved,
         test_no_nan_or_inf,
+        test_different_reference_sample_rate_analysis,
         test_capture_failure_is_reported,
         test_countdown_does_not_extend_capture_duration,
     ]

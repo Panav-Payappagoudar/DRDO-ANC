@@ -31,7 +31,16 @@ class DeepFilterNetEnhancer(Enhancer):
         # Offline PyTorch backend
         # ---------------------------------------------------------
 
-        self.model, self.df_state, suffix, epoch = init_df()
+        loaded = init_df()
+        if len(loaded) == 4:
+            self.model, self.df_state, suffix, epoch = loaded
+        elif len(loaded) == 3:
+            self.model, self.df_state, suffix = loaded
+            epoch = "unknown"
+        else:
+            raise RuntimeError(
+                f"Unexpected init_df() return length: {len(loaded)}"
+            )
 
         self._name = suffix
         self._sample_rate = self.df_state.sr()

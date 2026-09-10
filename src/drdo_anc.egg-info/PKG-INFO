@@ -4,4 +4,7 @@ Version: 0.1.0
 Summary: AI/ML-enabled adaptive noise cancellation for defence communication
 Requires-Python: >=3.11
 License-File: LICENSE
+Requires-Dist: sounddevice>=0.5
+Provides-Extra: gui
+Requires-Dist: PySide6>=6.6; extra == "gui"
 Dynamic: license-file

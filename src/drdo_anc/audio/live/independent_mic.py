@@ -16,6 +16,8 @@ from typing import Any
 
 import numpy as np
 
+from drdo_anc.audio.resampling import resample_mono
+
 from .multimic import (
     compute_correlation,
     compute_peak,
@@ -43,13 +45,28 @@ class IndependentMicConfig:
     primary_device: int | str
     reference_device: int | str
     sample_rate: int = 48_000
+    reference_sample_rate: int | None = None
     duration_s: float = 5.0
     blocksize: int = 1024
     condition: str | None = None
 
+    @property
+    def primary_sample_rate(self) -> int:
+        return self.sample_rate
+
+    @property
+    def effective_reference_sample_rate(self) -> int:
+        return (
+            self.sample_rate
+            if self.reference_sample_rate is None
+            else self.reference_sample_rate
+        )
+
     def validate(self) -> None:
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be positive.")
+        if self.reference_sample_rate is not None and self.reference_sample_rate <= 0:
+            raise ValueError("reference_sample_rate must be positive when set.")
         if self.duration_s <= 0.0:
             raise ValueError("duration_s must be positive.")
         if self.blocksize <= 0:
@@ -202,7 +219,13 @@ def _capture_device_stream(
 
     try:
         while time.perf_counter() < deadline and not stop_event.is_set():
-            data, overflowed = stream.read(blocksize)
+            available = stream.read_available
+            if available <= 0:
+                time.sleep(0.001)
+                continue
+
+            frames = min(blocksize, available)
+            data, overflowed = stream.read(frames)
 
             if overflowed:
                 overflows += 1
@@ -303,7 +326,7 @@ def record_independent_microphones(
             target=worker,
             kwargs={
                 "device": config.reference_device,
-                "requested_sample_rate": config.sample_rate,
+                "requested_sample_rate": config.effective_reference_sample_rate,
                 "duration_s": config.duration_s,
                 "blocksize": config.blocksize,
                 "stop_event": stop_event,
@@ -345,7 +368,12 @@ def record_independent_microphones(
     analysis = (
         None
         if defer_analysis
-        else analyze_independent_pair(primary, reference, config.sample_rate)
+        else analyze_independent_pair(
+            primary,
+            reference,
+            config.primary_sample_rate,
+            reference_sample_rate=config.effective_reference_sample_rate,
+        )
     )
 
     return IndependentCaptureResult(
@@ -357,18 +385,82 @@ def record_independent_microphones(
     )
 
 
+def prepare_independent_pair_for_analysis(
+    primary: DeviceStreamCapture | np.ndarray,
+    reference: DeviceStreamCapture | np.ndarray,
+    analysis_sample_rate: int,
+    *,
+    reference_sample_rate: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """
+    Return mono primary/reference arrays at ``analysis_sample_rate`` for comparison.
+
+    When the reference was captured at a different native rate, it is resampled
+    to ``analysis_sample_rate`` for delay/correlation estimation only. Raw
+    captures are not time-shifted.
+    """
+
+    if isinstance(primary, DeviceStreamCapture):
+        primary_audio = primary.audio
+        primary_native_rate = int(primary.requested_sample_rate)
+    else:
+        primary_audio = np.asarray(primary, dtype=np.float32).reshape(-1)
+        primary_native_rate = analysis_sample_rate
+
+    if isinstance(reference, DeviceStreamCapture):
+        reference_audio = reference.audio
+        reference_native_rate = int(reference.requested_sample_rate)
+    else:
+        reference_audio = np.asarray(reference, dtype=np.float32).reshape(-1)
+        reference_native_rate = (
+            reference_sample_rate
+            if reference_sample_rate is not None
+            else analysis_sample_rate
+        )
+
+    if reference_native_rate != analysis_sample_rate:
+        reference_audio = resample_mono(
+            reference_audio,
+            reference_native_rate,
+            analysis_sample_rate,
+        )
+        resample_note = (
+            f"Reference resampled from {reference_native_rate} Hz to "
+            f"{analysis_sample_rate} Hz for analysis only."
+        )
+    else:
+        resample_note = ""
+
+    if primary_native_rate != analysis_sample_rate:
+        primary_audio = resample_mono(
+            primary_audio,
+            primary_native_rate,
+            analysis_sample_rate,
+        )
+
+    analysis_length = min(primary_audio.shape[0], reference_audio.shape[0])
+    return (
+        primary_audio[:analysis_length],
+        reference_audio[:analysis_length],
+        resample_note,
+    )
+
+
 def analyze_independent_pair(
     primary: DeviceStreamCapture | np.ndarray,
     reference: DeviceStreamCapture | np.ndarray,
     requested_sample_rate: int,
     *,
+    reference_sample_rate: int | None = None,
     max_delay_samples: int | None = None,
 ) -> IndependentPairAnalysis:
     """
     Analyze two independent mono captures.
 
     Correlation and relative delay are estimated on the overlapping prefix of
-    the two signals without resampling or time-warping either stream.
+    the two signals. When capture rates differ, the reference is resampled to
+    ``requested_sample_rate`` for analysis only; no time-shift compensation is
+    applied beyond integer lag estimation.
     """
 
     if isinstance(primary, DeviceStreamCapture):
@@ -387,23 +479,39 @@ def analyze_independent_pair(
         primary_rate = float(requested_sample_rate)
 
     if isinstance(reference, DeviceStreamCapture):
-        reference_audio = reference.audio
+        reference_audio_raw = reference.audio
         reference_samples = reference.samples_captured
         reference_duration_s = reference.duration_s
         reference_rate = reference.estimated_sample_rate
+        effective_reference_rate = int(reference.requested_sample_rate)
     else:
-        reference_audio = np.asarray(reference, dtype=np.float32).reshape(-1)
-        reference_samples = int(reference_audio.shape[0])
+        reference_audio_raw = np.asarray(reference, dtype=np.float32).reshape(-1)
+        reference_samples = int(reference_audio_raw.shape[0])
         reference_duration_s = (
             reference_samples / requested_sample_rate
             if requested_sample_rate > 0
             else 0.0
         )
-        reference_rate = float(requested_sample_rate)
+        reference_rate = float(
+            reference_sample_rate
+            if reference_sample_rate is not None
+            else requested_sample_rate
+        )
+        effective_reference_rate = (
+            reference_sample_rate
+            if reference_sample_rate is not None
+            else requested_sample_rate
+        )
 
-    analysis_length = min(primary_samples, reference_samples)
-    primary_prefix = primary_audio[:analysis_length]
-    reference_prefix = reference_audio[:analysis_length]
+    primary_prefix, reference_prefix, resample_note = (
+        prepare_independent_pair_for_analysis(
+            primary,
+            reference,
+            requested_sample_rate,
+            reference_sample_rate=effective_reference_rate,
+        )
+    )
+    analysis_length = int(primary_prefix.shape[0])
 
     if analysis_length == 0:
         correlation = 0.0
@@ -445,17 +553,23 @@ def analyze_independent_pair(
     alignment_note = (
         "Independent input devices are not hardware-synchronized. "
         "Correlation and relative delay are estimated on the first "
-        f"{analysis_length} samples of each stream without resampling. "
+        f"{analysis_length} samples at {requested_sample_rate} Hz. "
         "Sample-index alignment across devices is approximate only."
     )
+    if resample_note:
+        alignment_note = f"{alignment_note} {resample_note}"
 
     return IndependentPairAnalysis(
         requested_sample_rate=requested_sample_rate,
         alignment_note=alignment_note,
-        primary_rms=compute_rms(primary_audio),
-        reference_rms=compute_rms(reference_audio),
-        primary_peak=compute_peak(primary_audio),
-        reference_peak=compute_peak(reference_audio),
+        primary_rms=compute_rms(primary_prefix if analysis_length else primary_audio),
+        reference_rms=compute_rms(
+            reference_prefix if analysis_length else reference_audio_raw
+        ),
+        primary_peak=compute_peak(primary_prefix if analysis_length else primary_audio),
+        reference_peak=compute_peak(
+            reference_prefix if analysis_length else reference_audio_raw
+        ),
         correlation=correlation,
         relative_delay_samples=delay_samples,
         relative_delay_ms=delay_ms,

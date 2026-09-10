@@ -1,5 +1,11 @@
 from .fake import FakeAudioInput, FakeAudioOutput
 from .interfaces import AudioInput, AudioOutput
+from .playback_queue import (
+    ABQueuedPlaybackOutput,
+    DEFAULT_MAX_CHUNKS,
+    PlaybackTimingStats,
+    QueuedPlaybackOutput,
+)
 from .capture_ux import (
     COUNTDOWN_SECONDS,
     PROGRESS_BAR_WIDTH,
@@ -63,10 +69,12 @@ from .sounddevice_backend import (
     SoundDeviceDuplexSession,
     SoundDeviceStreamStats,
     close_sounddevice_io,
+    close_sounddevice_output,
     downmix_to_mono,
     format_device_listing,
     list_audio_devices,
     open_sounddevice_io,
+    open_sounddevice_output,
     upmix_mono_to_channels,
 )
 
@@ -89,7 +97,8 @@ __all__ = [
     "LiveInstrumentation",
     "LiveRecordingPaths",
     "LiveStreamRecorder",
-    "MultiChannelAudioInput",
+    "ABQueuedPlaybackOutput",
+    "QueuedPlaybackOutput",
     "MultiMicConfig",
     "ReplayResult",
     "RoutedPrimaryAudioInput",
@@ -102,12 +111,13 @@ __all__ = [
     "analyze_channel_pair",
     "analyze_independent_pair",
     "close_sounddevice_io",
+    "close_sounddevice_output",
     "compute_correlation",
     "compute_peak",
     "compute_rms",
     "create_live_recorder",
     "create_live_session_dir",
-    "DEFAULT_REPLAY_CHUNK_SIZE",
+    "DEFAULT_MAX_CHUNKS",
     "estimate_relative_delay_samples",
     "load_session_chunk_size",
     "record_dual_microphone",
@@ -119,5 +129,6 @@ __all__ = [
     "format_device_listing",
     "list_audio_devices",
     "open_sounddevice_io",
+    "open_sounddevice_output",
     "upmix_mono_to_channels",
 ]

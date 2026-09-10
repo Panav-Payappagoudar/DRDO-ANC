@@ -1,0 +1,17 @@
+{
+  "version": "demo-train-v1",
+  "sample_rate": 48000,
+  "scenarios": [
+    {
+      "id": "training_speech_snr5",
+      "label": "Training Speech — SNR 5 dB",
+      "source": "file",
+      "wav": "data/train_noisy_snr5.wav",
+      "clean_reference": "data/train_clean_snr5.wav",
+      "enhanced_wav": "data/train_enh_snr5.wav",
+      "enhanced_playback": "live",
+      "target_snr_db": 5,
+      "description": "Project training clip: noisy input, clean reference, offline DF3 enhanced reference"
+    }
+  ]
+}

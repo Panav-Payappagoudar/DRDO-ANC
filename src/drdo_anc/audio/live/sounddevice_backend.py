@@ -317,6 +317,107 @@ class SoundDeviceDuplexSession:
         self._closed = True
 
 
+class SoundDevicePlaybackSession:
+    """
+    Playback-only PortAudio stream for WAV/demo replay without microphone capture.
+
+    Exposes the same ``write_mono`` / ``close`` surface as ``SoundDeviceDuplexSession``
+    so ``SoundDeviceAudioOutput`` can be reused unchanged.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        *,
+        output_device: int | str | None = None,
+        blocksize: int = 0,
+        latency: str | float = "high",
+    ) -> None:
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive.")
+
+        sd = _import_sounddevice()
+
+        self._sample_rate = sample_rate
+        self._output_device = output_device
+        self._output_channels = _device_channel_count(
+            output_device,
+            "output",
+        )
+        self._blocksize = blocksize
+        self._started = False
+        self._closed = False
+        self.stats = SoundDeviceStreamStats(
+            sample_rate=sample_rate,
+            input_channels=0,
+            output_channels=self._output_channels,
+            blocksize=blocksize,
+        )
+
+        self._stream = sd.OutputStream(
+            samplerate=sample_rate,
+            device=output_device,
+            channels=self._output_channels,
+            dtype="float32",
+            blocksize=blocksize,
+            latency=latency,
+        )
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def output_channels(self) -> int:
+        return self._output_channels
+
+    def _ensure_started(self) -> None:
+        if self._closed:
+            raise RuntimeError("Playback session is closed.")
+
+        if not self._started:
+            self._stream.start()
+            self._started = True
+            self.stats.mark_start()
+
+    def write_mono(self, audio: np.ndarray) -> None:
+        mono = np.asarray(audio, dtype=np.float32).reshape(-1)
+
+        if mono.size == 0:
+            return
+
+        self._ensure_started()
+
+        host_audio = upmix_mono_to_channels(
+            mono,
+            self._output_channels,
+        )
+
+        self._stream.write(host_audio)
+
+        self.stats.peak_output = max(
+            self.stats.peak_output,
+            float(np.max(np.abs(mono))),
+        )
+        self.stats.samples_written += int(mono.size)
+        self.stats.chunks_processed += 1
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self.stats.mark_stop()
+
+        if self._started and self._stream is not None:
+            self._stream.stop()
+
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+
+        self._closed = True
+
+
 def open_sounddevice_io(
     sample_rate: int,
     *,
@@ -344,6 +445,31 @@ def open_sounddevice_io(
         SoundDeviceAudioInput(session),
         SoundDeviceAudioOutput(session),
     )
+
+
+def open_sounddevice_output(
+    sample_rate: int,
+    *,
+    output_device: int | str | None = None,
+    blocksize: int = 0,
+    latency: str | float = "high",
+) -> SoundDeviceAudioOutput:
+    """Open a playback-only output device for demo/offline replay."""
+
+    session = SoundDevicePlaybackSession(
+        sample_rate,
+        output_device=output_device,
+        blocksize=blocksize,
+        latency=latency,
+    )
+
+    return SoundDeviceAudioOutput(session)
+
+
+def close_sounddevice_output(audio_output: SoundDeviceAudioOutput) -> None:
+    """Close a playback session opened via ``open_sounddevice_output()``."""
+
+    audio_output.close()
 
 
 class SoundDeviceAudioInput(AudioInput):
