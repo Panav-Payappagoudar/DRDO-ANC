@@ -2,143 +2,140 @@
 
 # 🎧 DRDO-ANC
 
-**An End-to-End Real-Time Active Noise Cancellation & Benchmarking Framework**
+### An End-to-End Real-Time Active Noise Cancellation & Benchmarking Framework
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![PySide6](https://img.shields.io/badge/PySide6-GUI-green.svg)](https://doc.qt.io/qtforpython-6/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-ee4c2c.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<br>
 
-DRDO-ANC is an advanced AI/ML-enabled adaptive noise cancellation and speech enhancement project designed for deterministic offline benchmarking, DSP evaluation, and ultra-low-latency real-time hardware execution.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![PySide6](https://img.shields.io/badge/PySide6-GUI-green.svg?style=for-the-badge&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-Deep_Learning-ee4c2c.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Rust](https://img.shields.io/badge/Rust-Native_DSP-black.svg?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-[Architecture](#-system-architecture) • [Core Layers](#-framework-layers) • [Models Integrated](#-models--dsp) • [Real-Time GUI](#-real-time-telemetry-gui) • [Installation](#-installation) • [Usage](#-usage)
+<br>
+
+<img src="https://raw.githubusercontent.com/Panav-Payappagoudar/DRDO-ANC/main/docs/assets/waveform-animation.svg" alt="Animated Audio Waveform" onerror="this.onerror=null; this.src='https://via.placeholder.com/800x120/080811/00FF00?text=Live+Audio+Telemetry';">
+
+<p align="center">
+  <a href="#-system-architecture">Architecture</a> •
+  <a href="#-framework-layers">Core Layers</a> •
+  <a href="#-models--dsp">Models & DSP</a> •
+  <a href="#-real-time-telemetry-gui">Real-Time GUI</a> •
+  <a href="#-installation">Installation</a> •
+  <a href="#-usage">Usage</a>
+</p>
 
 </div>
 
 ---
 
+## 🔬 Project Overview
+
+**DRDO-ANC** is a highly specialized AI/ML-enabled adaptive noise cancellation and speech enhancement project engineered for defense communication. This infrastructure supports both deterministic offline DSP benchmarking and ultra-low-latency real-time hardware execution.
+
+### Key Capabilities
+* **Lazy Audio Loading:** Ingests large Hugging Face audio datasets directly from ZIP-backed manifests (`ZipManifestDataset`).
+* **Deterministic Benchmarking:** Generates reproducible clean/noise/SNR mixtures dynamically for offline evaluation.
+* **Dual-Mode Execution:** Runs **DeepFilterNet3 (DF3)** in both batch-offline mode via PyTorch and zero-overhead native streaming mode via a Rust-compiled `.dll`.
+* **Synchronous Hardware I/O:** Executes a live microphone-to-speaker pipeline natively mapped to dual-channel or independent-device hardware.
+* **DSP Primitives:** Features an integrated **NLMS adaptive residual-noise filter** independent of the ML enhancements.
+* **Supervised Classification:** Employs a recording-safe, split-stratified `SupervisedNoiseClassifier` (v2) for defense-specific noise identification (UAV Drone, Impulsive Firearms, Vehicle Engine).
+
+---
+
 ## 🏗 System Architecture
 
-DRDO-ANC provides a completely reproducible evaluation pipeline, bridging Hugging Face audio datasets to real-time hardware execution with seamless streaming-delay compensation.
+DRDO-ANC establishes a strictly layered, reproducible pipeline bridging Hugging Face datasets with real-time streaming buffers and delay compensation mechanics.
 
 ```mermaid
 flowchart TD
-    HF["Hugging Face Dataset\n(ZIP-backed Manifests)"]
-    ZMD["ZipManifestDataset"]
-    BC["BenchmarkCase\n(Clean + Noise + SNR)"]
-    MG["MixtureGenerator\n(16 kHz → 48 kHz resampled)"]
-    REG["Model Registry\n(Config & Delay Samples)"]
-    ENH["Enhancer Interface"]
-    OFF["Offline PyTorch Processing"]
-    STR["Native Streaming backend\n(df.dll)"]
-    OUT["Enhanced Audio"]
-    METRICS["Evaluate Pair\n(SNR / SI-SDR / STOI / PESQ)"]
+    subgraph Data & Benchmark Layer
+        HF["Hugging Face Dataset\n(ZIP Manifests)"]
+        META["metadata.csv"]
+        ZMD["ZipManifestDataset"]
+        BC["BenchmarkCase\n(Clean + Noise + SNR)"]
+        MG["MixtureGenerator\n(16 kHz -> 48 kHz resampled)"]
+    end
     
-    HF --> ZMD --> BC --> MG --> ENH
+    subgraph Enhancement & Processing Layer
+        REG["Model Registry\n(Config & Delay)"]
+        ENH["Enhancer Interface"]
+        OFF["Offline Processing\n(PyTorch - df.enhance)"]
+        STR["Native Streaming\n(Rust df.dll + StreamingBuffer)"]
+        DELAY["Evaluation Delay\n(e.g., 1440 samples)"]
+    end
+
+    subgraph Evaluation Layer
+        METRICS["evaluate_pair\n(SNR / SI-SDR / STOI / PESQ)"]
+        OUT["Enhanced 48kHz Output"]
+        RES["ManifestBenchmarkReport\n(JSON / CSV)"]
+    end
+
+    HF --> META --> ZMD --> BC --> MG --> ENH
     REG -.-> ENH
+    REG -.-> DELAY
     ENH --> OFF
     ENH --> STR
     OFF --> OUT
     STR --> OUT
-    OUT --> METRICS
+    OUT --> DELAY --> METRICS --> RES
 ```
 
 ---
 
 ## 🧠 Framework Layers
 
-The codebase is strictly layered, isolating dataset management from model inference and DSP primitives.
+The codebase is highly modularized, cleanly separating manifest parsing from DSP primitives and hardware I/O.
 
-| Layer | Responsibility | Key Features |
-|-------|----------------|--------------|
-| **Dataset** | Audio Corpus Management | Lazy ZIP access (`ZipManifestDataset`), reading source clip metadata. |
-| **Benchmark** | Reproducible Evaluation | Generates deterministic mixtures, orchestrates runs, computes objective metrics, and saves JSON/CSV reports. |
-| **Enhancement** | Model Abstraction | Defines the `Enhancer` interface. Seamlessly supports both offline enhancement and native streaming. |
-| **DSP** | Signal Processing Core | Model-independent adaptive residual filtering (`NLMSFilter`). |
-| **Live Audio I/O** | Hardware Integration | Synchronous duplex streams (`sounddevice`), dual-microphone capture, session recording, and offline session replay. |
-| **Real-Time GUI** | Telemetry Visualization | Completely decoupled PySide6/QML frontend ensuring zero audio thread blocking. |
+| Layer | Responsibility | Key Abstractions & Features |
+|-------|----------------|-----------------------------|
+| **Dataset** | Lazy Audio Corpus | `ZipManifestDataset`, reading metadata without unzipping large corpuses. |
+| **Benchmark** | Reproducible Eval | `MixtureGenerator`, `ManifestBenchmarkRunner`. Generates deterministic noise scenarios and saves JSON reports. |
+| **Enhancement** | Model Interface | The `Enhancer` ABC. Implements `DeepFilterNetEnhancer` and `FineTunedDeepFilterNetEnhancer`. |
+| **DSP** | Signal Processing | The `NLMSFilter`. A model-independent NumPy implementation of the Normalized Least Mean Squares algorithm. |
+| **Classification** | Defence Noise ID | `SupervisedNoiseClassifier` utilizing stratified `sklearn` pipelines (LR/RF/ExtraTrees) to identify drones, firearms, and engines. |
+| **Live Audio** | Hardware Streaming| Duplex I/O via `SoundDeviceDuplexSession`. Fully synchronous `StreamingPipeline` supporting independent dual-microphones. |
+| **Real-Time GUI** | Telemetry Frontend | PySide6 + QML decoupled interface. Zero audio-thread blocking. |
 
 ---
 
-## 🚀 Models & DSP
+## 🚀 Models & DSP Deep-Dive
 
-The framework is built to evaluate and run models fairly by isolating their architecture-specific delays.
+DRDO-ANC evaluates enhancements fairly by isolating architecture-specific delays. 
 
-### DeepFilterNet3 (Primary Enhancer)
-Integrated directly via the model registry, running in two modes:
-1. **Offline Mode**: Utilizes PyTorch checkpoints (`df.enhance`) for bulk benchmarking with zero delay padding.
-2. **Streaming Mode**: Utilizes the native Rust `df.dll` backend, chunking arbitrary audio inputs into complete frames via a custom `StreamingBuffer`. Inherently compensates for a strict **1440-sample** evaluation delay (at 48kHz).
+### DeepFilterNet3 Implementation
 
-### Adaptive DSP Filtering (NLMS)
-A highly optimized, pure NumPy implementation of the Normalized Least Mean Squares (NLMS) adaptive residual-noise filter. Designed to act as a post-processing step to the AI speech enhancer, taking primary and reference channels to attenuate correlated hardware noise.
+Integrated into the `Model Registry`, DF3 operates in two distinct modes:
+
+1. **Offline Path (PyTorch)**
+   - Utilizes `df.enhance(model, df_state, audio)`.
+   - Expects full 48 kHz `[1, T]` floating-point tensors.
+   - Algorithmic evaluation delay: `0 samples`.
+
+2. **Native Streaming Path (Rust `.dll`)**
+   - Utilizes `NativeDF3Backend` via `ctypes` wrapping `df_process_frame`.
+   - Converts arbitrary hardware incoming chunks (e.g. 1024 samples) into strictly **480-sample** DF3 frames using `StreamingBuffer`.
+   - The final partial frame is zero-padded during the `flush()` shutdown semantics.
+   - Algorithmic evaluation delay: **1440 samples** (30 ms at 48kHz). The evaluation framework rigorously compensates for this via `apply_evaluation_delay()`.
+
+### Adaptive DSP (NLMS)
+
+A standalone `NLMSFilter` module acts as a highly optimized, pure NumPy post-processing step to attenuate correlated hardware noise using dual-microphone configurations (Primary & Reference).
 
 ---
 
 ## 📊 Real-Time Telemetry GUI
 
-The live telemetry interface is engineered for absolute performance. **The GUI may drop a visual frame, but the audio pipeline never waits for the GUI.**
+The live telemetry interface is engineered for absolute performance. **The GUI is strictly observational: it may drop a visual frame, but the audio pipeline never stalls.**
 
-<img width="100%" src="https://via.placeholder.com/800x400/080811/00FF00?text=Premium+Dark+Telemetry+Dashboard" alt="GUI Preview">
+<div align="center">
+  <img width="90%" src="https://via.placeholder.com/800x450/080811/00FF00?text=Premium+PySide6+QML+Dark+Dashboard" alt="GUI Preview" style="border-radius: 12px; border: 1px solid #333;">
+</div>
 
-### Technical Highlights
-- **Decoupled Architecture**: `StreamingPipeline` executes in a daemon thread, executing non-blocking `telemetry_callbacks`.
-- **GPU-Accelerated Oscilloscopes**: PySide6 QML `Canvas` draws glowing waveforms from highly downsampled, peak-preserved data arrays.
-- **Dynamic LED Audio Meters**: Multi-stop gradients tracking Peak and RMS audio levels against hardware clipping limits.
-- **Hardware Sparklines**: DevOps-style history graphing for **Real-Time Factor (RTF)**, **Processing Latency (ms)**, and **Buffer Overflows**.
-
----
-
-## ⚙️ Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/SIH-2026-27/DRDO-ANC.git
-   cd DRDO-ANC
-   ```
-
-2. **Install Core Dependencies:**
-   Install the framework locally, ensuring scientific computation and hardware audio drivers are present.
-   ```bash
-   pip install -e .
-   pip install PySide6 sounddevice soundfile numpy torch scipy
-   ```
-
-3. **Install Machine Learning Backends:**
-   ```bash
-   pip install deepfilternet
-   ```
-
----
-
-## 💻 Usage
-
-### 1. Real-Time Hardware UI
-
-To monitor the active noise cancellation happening on your live hardware microphones (supports stereo/dual-microphone interfaces):
-
-```bash
-# Production Mode: AI Enhancement via DeepFilterNet3
-python scripts/run_live_gui.py --model DeepFilterNet3
-
-# Hardware Diagnostic Mode: Raw Microphone Pass-through
-python scripts/run_live_gui.py --passthrough
-```
-
-### 2. Offline Benchmarking
-
-To benchmark registered models against standard datasets:
-
-```bash
-# Run the primary 60-case manifest benchmark CLI
-python scripts/run_df3_manifest_benchmark.py --model DeepFilterNet3
-```
-
-### 3. Dual-Microphone Experiments
-
-To capture and analyze independent dual-microphone routing (primary/reference):
-```bash
-python scripts/test_dual_microphone.py --capture
-```
+### Architectural Highlights
+- **Decoupled Bridge:** The `GUIBridge` utilizes a 60 FPS `QTimer` to perform thread-safe latest-value handoffs from the audio daemon.
+- **GPU Canvas:** High-performance QML `Canvas` rendering glowing waveforms from `WaveformProcessor`'s peak-preserving downsampled arrays (max 500 points).
+- **Telemetry Sparklines:** DevOps-style tracking of **Real-Time Factor (RTF)**, Processing Latency (ms), and Buffer Overflows.
 
 ---
 
@@ -146,24 +143,98 @@ python scripts/test_dual_microphone.py --capture
 
 ```text
 DRDO-ANC/
+├── data/                               # Generated reports and WAV captures
+├── docs/                               # Additional documentation & assets
+├── models/
+│   └── dfn3_finetuned/                 # Fine-Tuned DF3 ONNX bundle and checkpoints
 ├── scripts/
-│   ├── run_live_gui.py                # Main entry point for Real-Time UI
-│   ├── run_df3_manifest_benchmark.py  # Benchmark orchestration
-│   ├── analyze_live_session.py        # Offline energy-drop analysis
-│   └── test_*.py                      # Hardware diagnostic tools
-├── src/drdo_anc/
-│   ├── audio/live/                    # sounddevice backends, recorders, duplex IO
-│   ├── benchmark/                     # Manifest parsers, mixture generators, metrics
-│   ├── dataset/                       # Lazy ZIP loaders, HF Integrations
-│   ├── dsp/                           # Adaptive filters (NLMS)
-│   ├── enhancement/                   # Model Registry, DF3 bindings, streaming buffers
-│   └── gui/                           # PySide6 app, Thread-Safe Bridge, Telemetry properties
-├── PROJECT_STATUS.md                  # Comprehensive architectural roadmap
-├── implementation_plan.md             # Developer runbook and UI design specs
-└── implementation_report.md           # Analysis of decoupled multi-threaded constraints
+│   ├── run_live_gui.py                 # Telemetry Frontend Entry Point
+│   ├── run_df3_manifest_benchmark.py   # Main Evaluation CLI
+│   ├── run_usb_bluetooth_dual_mic_experiment.py # Task 6 Multi-Mic Logic
+│   ├── train_noise_classifier_v2.py    # Rule-Based / Supervised Classification
+│   └── test_*.py                       # Unit & Integration Testing Suite
+└── src/drdo_anc/
+    ├── audio/                          # I/O, Mixing, Resampling, Live PortAudio 
+    ├── benchmark/                      # Deterministic JSON Manifest Parsers
+    ├── classification/                 # Noise categorization features & eval
+    ├── dataset/                        # HF integration & Lazy Zip reads
+    ├── dsp/                            # NLMS Filtering primitives
+    ├── enhancement/                    # Model Registry, DF3 bindings, Buffers
+    ├── experiments/                    # Local vs FineTuned comparative modules
+    └── gui/                            # PySide6 Bootstrapping & QML Assets
 ```
 
 ---
+
+## ⚙️ Installation
+
+**Prerequisites:** Python 3.10+ and a standard C++ build chain (for specific wheel compilation if needed).
+
+1. **Clone the Repository:**
+   ```bash
+   git clone https://github.com/Panav-Payappagoudar/DRDO-ANC.git
+   cd DRDO-ANC
+   ```
+
+2. **Initialize Environment & Dependencies:**
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   
+   # Install local framework in editable mode
+   pip install -e .
+   
+   # Install audio I/O and scientific stack
+   pip install sounddevice soundfile numpy torch scipy scikit-learn
+   
+   # Install GUI prerequisites
+   pip install PySide6
+   
+   # Install Enhancement Backends
+   pip install deepfilternet
+   ```
+
+> [!NOTE]
+> Ensure the native DeepFilterNet DLLs are accessible or properly compiled based on the `deepfilternet.py` registry pathways.
+
+---
+
+## 💻 Usage & CLI Entrypoints
+
+### 1. Real-Time Telemetry GUI
+Launch the GPU-accelerated monitoring interface. Defaults to "Demo Mode".
+
+```bash
+# Production UI
+python scripts/run_live_gui.py
+
+# Auto-start hardware capture with specific mic/speaker devices
+python scripts/run_live_gui.py --live-on-start --input-device 20 --output-device 18
+```
+
+### 2. Offline Deterministic Benchmarking
+Evaluate the registered AI models against the 60-case Hugging Face dataset. Calculates SI-SDR, STOI, PESQ, and SNR metrics.
+
+```bash
+python scripts/run_df3_manifest_benchmark.py --model DeepFilterNet3
+```
+
+### 3. Noise Classification
+Evaluate the custom trained V2 Supervised Classifier on defense-specific corpora.
+
+```bash
+python scripts/run_noise_classifier_corpus_eval.py
+```
+
+### 4. Hardware Diagnostic Pass-through
+Bypass all enhancements to verify system duplex limits and latency.
+
+```bash
+python scripts/test_live_passthrough.py --mode pipeline
+```
+
+---
+
 <div align="center">
-<i>Built for real-time excellence. Designed to never miss a frame.</i>
+  <i>Engineered for <b>Deterministic Evaluation</b>. Designed for <b>Zero-Delay Streaming</b>.</i>
 </div>
